@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<roblox version="4">
+  <External>null</External>
+  <External>null</External>
+  <Item class="Workspace" referent="RBX1">
+    <Properties>
+      <string name="Name">Workspace</string>
+    </Properties>
+    <Item class="LocalScript" referent="RBX2">
+      <Properties>
+        <string name="Name">Boot</string>
+        <ProtectedString name="Source"><![CDATA[print("client booting")
+
+local players = game:GetService("Players")
+print("CharacterAutoLoads:", players.CharacterAutoLoads)
+print("LocalPlayer:", players.LocalPlayer and players.LocalPlayer.Name or "nil")
+
+local runService = game:GetService("RunService")
+print("IsClient:", runService:IsClient(), "IsServer:", runService:IsServer())
+
+local ok, err = pcall(function()
+    players.LocalPlayer:LoadCharacter()
+end)
+
+print("LoadCharacter ok:", ok)
+if not ok then
+    warn(err)
+end
+]]></ProtectedString>
+      </Properties>
+    </Item>
+    <Item class="Script" referent="RBX3">
+      <Properties>
+        <string name="Name">Boot</string>
+        <ProtectedString name="Source"><![CDATA[print("server booting")
+
+local shared = require(script.Parent.Shared)
+local part = Instance.new("Part")
+part.Name = shared.PartName
+part.Position = Vector3.new(0, shared.Height, 0)
+part.Size = Vector3.new(20, 1, 20)
+part.CanCollide = true
+part.Anchored = false
+part.Parent = workspace
+
+print("server created", part:GetFullName())
+]]></ProtectedString>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="RBX4">
+      <Properties>
+        <string name="Name">Shared</string>
+        <ProtectedString name="Source"><![CDATA[return {
+    PartName = "DemoPlate",
+    Height = 12,
+}
+]]></ProtectedString>
+      </Properties>
+    </Item>
+  </Item>
+</roblox>

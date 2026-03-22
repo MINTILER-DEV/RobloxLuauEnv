@@ -1,0 +1,19 @@
+RLEIMG1
+{
+  "format": "RobloxLuaEnvironment",
+  "version": 1,
+  "files": [
+    {
+      "path": "Workspace/Boot.client.luau",
+      "content_base64": "cHJpbnQoImNsaWVudCBib290aW5nIikKCmxvY2FsIHBsYXllcnMgPSBnYW1lOkdldFNlcnZpY2UoIlBsYXllcnMiKQpwcmludCgiQ2hhcmFjdGVyQXV0b0xvYWRzOiIsIHBsYXllcnMuQ2hhcmFjdGVyQXV0b0xvYWRzKQpwcmludCgiTG9jYWxQbGF5ZXI6IiwgcGxheWVycy5Mb2NhbFBsYXllciBhbmQgcGxheWVycy5Mb2NhbFBsYXllci5OYW1lIG9yICJuaWwiKQoKbG9jYWwgcnVuU2VydmljZSA9IGdhbWU6R2V0U2VydmljZSgiUnVuU2VydmljZSIpCnByaW50KCJJc0NsaWVudDoiLCBydW5TZXJ2aWNlOklzQ2xpZW50KCksICJJc1NlcnZlcjoiLCBydW5TZXJ2aWNlOklzU2VydmVyKCkpCgpsb2NhbCBvaywgZXJyID0gcGNhbGwoZnVuY3Rpb24oKQogICAgcGxheWVycy5Mb2NhbFBsYXllcjpMb2FkQ2hhcmFjdGVyKCkKZW5kKQoKcHJpbnQoIkxvYWRDaGFyYWN0ZXIgb2s6Iiwgb2spCmlmIG5vdCBvayB0aGVuCiAgICB3YXJuKGVycikKZW5kCg=="
+    },
+    {
+      "path": "Workspace/Boot.server.luau",
+      "content_base64": "cHJpbnQoInNlcnZlciBib290aW5nIikKCmxvY2FsIHNoYXJlZCA9IHJlcXVpcmUoc2NyaXB0LlBhcmVudC5TaGFyZWQpCmxvY2FsIHBhcnQgPSBJbnN0YW5jZS5uZXcoIlBhcnQiKQpwYXJ0Lk5hbWUgPSBzaGFyZWQuUGFydE5hbWUKcGFydC5Qb3NpdGlvbiA9IFZlY3RvcjMubmV3KDAsIHNoYXJlZC5IZWlnaHQsIDApCnBhcnQuU2l6ZSA9IFZlY3RvcjMubmV3KDIwLCAxLCAyMCkKcGFydC5DYW5Db2xsaWRlID0gdHJ1ZQpwYXJ0LkFuY2hvcmVkID0gZmFsc2UKcGFydC5QYXJlbnQgPSB3b3Jrc3BhY2UKCnByaW50KCJzZXJ2ZXIgY3JlYXRlZCIsIHBhcnQ6R2V0RnVsbE5hbWUoKSkK"
+    },
+    {
+      "path": "Workspace/Shared.luau",
+      "content_base64": "cmV0dXJuIHsKICAgIFBhcnROYW1lID0gIkRlbW9QbGF0ZSIsCiAgICBIZWlnaHQgPSAxMiwKfQo="
+    }
+  ]
+}
