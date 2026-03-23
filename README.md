@@ -43,7 +43,7 @@ Server mode auto-runs `Script` instances. Client mode auto-runs `LocalScript` in
 
 ## External files (ExternalData)
 
-Files placed in an `ExternalData` directory at the root of your project are loaded as `StringValue` instances. The filename becomes the instance name, and the file content is stored in the `Value` property. This allows you to include configuration files, data files, and other resources in your projects.
+Files placed in an `ExternalData` directory at the root of your project are loaded as `StringValue` instances. The filename becomes the instance name, and the file content is stored in the `Value` property as raw bytes. Text files still work normally, and binary files such as `.elf` payloads are preserved without UTF-8 conversion.
 
 ```
 project/

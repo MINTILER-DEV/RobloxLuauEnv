@@ -14,6 +14,7 @@ pub enum PropertyValue {
     Bool(bool),
     Number(f64),
     String(String),
+    BinaryString(Vec<u8>),
     Vector3(Vector3),
     Color3(Color3),
 }
@@ -200,7 +201,7 @@ pub fn validate_property_kind(expected: PropertyKind, value: &PropertyValue) -> 
     let actual = match value {
         PropertyValue::Bool(_) => PropertyKind::Bool,
         PropertyValue::Number(_) => PropertyKind::Number,
-        PropertyValue::String(_) => PropertyKind::String,
+        PropertyValue::String(_) | PropertyValue::BinaryString(_) => PropertyKind::String,
         PropertyValue::Vector3(_) => PropertyKind::Vector3,
         PropertyValue::Color3(_) => PropertyKind::Color3,
     };
@@ -225,6 +226,7 @@ pub fn property_kind(class_name: &str, property_name: &str) -> Option<PropertyKi
         "Source" if matches!(class_name, "Script" | "LocalScript" | "ModuleScript") => {
             Some(PropertyKind::String)
         }
+        "Value" if class_name == "StringValue" => Some(PropertyKind::String),
         "StreamingEnabled" if class_name == "Workspace" => Some(PropertyKind::Bool),
         "Anchored" | "CanCollide" if class_name == "Part" => Some(PropertyKind::Bool),
         "Transparency" if class_name == "Part" => Some(PropertyKind::Number),
@@ -276,6 +278,12 @@ pub fn default_properties(class_name: &str) -> HashMap<String, PropertyValue> {
         "Script" | "LocalScript" | "ModuleScript" => {
             properties.insert("Source".to_string(), PropertyValue::String(String::new()));
         }
+        "StringValue" => {
+            properties.insert(
+                "Value".to_string(),
+                PropertyValue::BinaryString(Vec::new()),
+            );
+        }
         _ => {}
     }
 
@@ -316,6 +324,7 @@ pub fn is_a_class(class_name: &str, query: &str) -> bool {
         "Model" => &["PVInstance", "Instance"],
         "Part" => &["BasePart", "PVInstance", "Instance"],
         "Folder" => &["Instance"],
+        "StringValue" => &["ValueBase", "Instance"],
         "ReplicatedStorage"
         | "ServerStorage"
         | "ServerScriptService"

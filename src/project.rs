@@ -36,7 +36,7 @@ pub struct ExternalFile {
     pub relative_path: PathBuf,
     pub container_path: Vec<String>,
     pub name: String,
-    pub content: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +58,7 @@ pub struct ProjectNode {
     pub name: String,
     pub class_name: String,
     pub source: Option<String>,
+    pub value: Option<Vec<u8>>,
     pub script_path: Option<PathBuf>,
     pub children: Vec<ProjectNode>,
 }
@@ -267,13 +268,6 @@ fn classify_external_file(file: &ProjectFile) -> Result<Option<ExternalFile>> {
         return Ok(None);
     }
 
-    let content = String::from_utf8(file.bytes.clone()).map_err(|error| {
-        Error::RuntimeError(format!(
-            "External file {} is not valid UTF-8: {error}",
-            file.relative_path.display()
-        ))
-    })?;
-
     let mut container_path = segments.clone();
     container_path.remove(0); // Remove "ExternalData"
     container_path.pop(); // Remove filename
@@ -282,7 +276,7 @@ fn classify_external_file(file: &ProjectFile) -> Result<Option<ExternalFile>> {
         relative_path: file.relative_path.clone(),
         container_path,
         name: file_name.to_string(),
-        content,
+        bytes: file.bytes.clone(),
     }))
 }
 
@@ -315,6 +309,7 @@ fn build_directory_mount(name: String, directory: DirNode) -> Option<ProjectNode
             name,
             class_name: "ModuleScript".to_string(),
             source: Some(init_script.source),
+            value: None,
             script_path: Some(init_script.relative_path),
             children,
         });
@@ -329,6 +324,7 @@ fn build_directory_mount(name: String, directory: DirNode) -> Option<ProjectNode
         name,
         class_name: "Folder".to_string(),
         source: None,
+        value: None,
         script_path: None,
         children,
     })
@@ -375,6 +371,7 @@ fn script_to_node(script: ProjectScript) -> ProjectNode {
         name: script.name,
         class_name: class_name.to_string(),
         source: Some(script.source),
+        value: None,
         script_path: Some(script.relative_path),
         children: Vec::new(),
     }
@@ -384,7 +381,8 @@ fn external_file_to_node(external_file: ExternalFile) -> ProjectNode {
     ProjectNode {
         name: external_file.name,
         class_name: "StringValue".to_string(),
-        source: Some(external_file.content),
+        source: None,
+        value: Some(external_file.bytes),
         script_path: Some(external_file.relative_path),
         children: Vec::new(),
     }
@@ -440,5 +438,24 @@ mod tests {
         assert_eq!(children[0].class_name, "ModuleScript");
         assert_eq!(children[0].name, "Foo");
         assert_eq!(children[0].children[0].name, "Child");
+    }
+
+    #[test]
+    fn external_files_keep_raw_bytes_on_string_value_nodes() {
+        let project = LoadedProject {
+            files: vec![ProjectFile {
+                relative_path: PathBuf::from("ExternalData/hello.elf"),
+                bytes: vec![0x7f, 0x45, 0x4c, 0x46, 0x00, 0xff],
+            }],
+        };
+
+        let layout = project.layout().expect("layout");
+        let ProjectMount::DataModelChild(node) = &layout.top_level[0] else {
+            panic!("expected top-level external file");
+        };
+        assert_eq!(node.class_name, "StringValue");
+        assert_eq!(node.name, "hello.elf");
+        assert!(node.source.is_none());
+        assert_eq!(node.value.as_deref(), Some(&[0x7f, 0x45, 0x4c, 0x46, 0x00, 0xff][..]));
     }
 }

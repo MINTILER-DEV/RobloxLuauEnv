@@ -73,6 +73,7 @@ fn layout_to_rbxlx(layout: &ProjectLayout) -> String {
                     name: service_name.clone(),
                     class_name: service_name.clone(),
                     source: None,
+                    value: None,
                     script_path: None,
                     children: children.clone(),
                 };
@@ -142,6 +143,11 @@ fn write_node(
     write_string_property(out, depth + 2, "Name", &node.name);
     if let Some(source) = &node.source {
         write_protected_string_property(out, depth + 2, "Source", source);
+    }
+    if let Some(value) = &node.value {
+        if let Ok(value_text) = std::str::from_utf8(value) {
+            write_string_property(out, depth + 2, "Value", value_text);
+        }
     }
     out.push_str(&format!("{indent}  </Properties>\n"));
     for child in &node.children {

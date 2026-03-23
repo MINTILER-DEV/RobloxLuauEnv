@@ -64,10 +64,10 @@ print(seedData.Value)
 
 ### File Content
 
-- Files are loaded as **UTF-8 text**
 - File names with any extension are supported
 - File content is stored in the `Value` property of the `StringValue`
-- Only valid UTF-8 content is supported (binary files will fail)
+- Text files round-trip as normal Lua strings
+- Binary files are preserved as raw bytes, so assets like `.elf` files can be read with `string.byte(...)`
 
 ## Example
 

@@ -299,6 +299,14 @@ impl RobloxEnvironment {
                 PropertyValue::String(source.clone()),
             )?;
         }
+        if let Some(value) = &node.value {
+            self.runtime.set_property(
+                &self.lua,
+                &instance,
+                "Value",
+                PropertyValue::BinaryString(value.clone()),
+            )?;
+        }
         instance.borrow_mut().script_path = node
             .script_path
             .as_ref()
@@ -400,7 +408,7 @@ impl UserData for LuaInstance {
                         this.runtime.set_parent(lua, &this.instance, parent)?;
                     }
                     _ => {
-                        let property = lua_value_to_property(&value)?;
+                        let property = lua_value_to_property_for_instance(&this.instance, &key, &value)?;
                         this.runtime
                             .set_property(lua, &this.instance, &key, property)?;
                     }
@@ -900,16 +908,26 @@ fn property_to_lua(lua: &Lua, value: &PropertyValue) -> Result<Value> {
         PropertyValue::Bool(value) => Value::Boolean(*value),
         PropertyValue::Number(value) => Value::Number(*value),
         PropertyValue::String(value) => Value::String(lua.create_string(value)?),
+        PropertyValue::BinaryString(value) => Value::String(lua.create_string(value)?),
         PropertyValue::Vector3(value) => Value::UserData(lua.create_userdata(value.clone())?),
         PropertyValue::Color3(value) => Value::UserData(lua.create_userdata(value.clone())?),
     })
 }
 
-fn lua_value_to_property(value: &Value) -> Result<PropertyValue> {
+fn lua_value_to_property_for_instance(
+    instance: &InstanceRef,
+    property_name: &str,
+    value: &Value,
+) -> Result<PropertyValue> {
     match value {
         Value::Boolean(value) => Ok(PropertyValue::Bool(*value)),
         Value::Integer(value) => Ok(PropertyValue::Number(*value as f64)),
         Value::Number(value) => Ok(PropertyValue::Number(*value)),
+        Value::String(value)
+            if instance.borrow().class_name == "StringValue" && property_name == "Value" =>
+        {
+            Ok(PropertyValue::BinaryString(value.as_bytes().to_vec()))
+        }
         Value::String(value) => Ok(PropertyValue::String(value.to_str()?.to_string())),
         Value::UserData(userdata) if userdata.is::<Vector3>() => Ok(PropertyValue::Vector3(
             userdata.borrow::<Vector3>()?.clone(),
@@ -1285,6 +1303,61 @@ mod tests {
                 assert(foo.Child.ClassName == "ModuleScript")
                 local result = require(foo)
                 assert(result.Value == 7)
+            "#,
+        )
+        .expect("verification should succeed");
+    }
+
+    #[test]
+    fn external_text_files_load_into_string_value_value() {
+        let env = RobloxEnvironment::new(RuntimeMode::Server).expect("environment");
+        let project = LoadedProject {
+            files: vec![ProjectFile {
+                relative_path: PathBuf::from("ExternalData/config.json"),
+                bytes: br#"{"enabled":true}"#.to_vec(),
+            }],
+        };
+
+        env.run_project(project).expect("project should run");
+        env.run_script(
+            "verify_external_text",
+            r#"
+                local config = game:FindFirstChild("config.json")
+                assert(config ~= nil)
+                assert(config.ClassName == "StringValue")
+                assert(config.Value == '{"enabled":true}')
+            "#,
+        )
+        .expect("verification should succeed");
+    }
+
+    #[test]
+    fn external_binary_files_preserve_raw_bytes() {
+        let env = RobloxEnvironment::new(RuntimeMode::Server).expect("environment");
+        let project = LoadedProject {
+            files: vec![ProjectFile {
+                relative_path: PathBuf::from("ExternalData/hello.elf"),
+                bytes: vec![0x7f, 0x45, 0x4c, 0x46, 0x00, 0x02, 0xff],
+            }],
+        };
+
+        env.run_project(project).expect("project should run");
+        env.run_script(
+            "verify_external_binary",
+            r#"
+                local elf = game:FindFirstChild("hello.elf")
+                assert(elf ~= nil)
+                assert(elf.ClassName == "StringValue")
+                local value = elf.Value
+                assert(#value == 7)
+                local b1, b2, b3, b4, b5, b6, b7 = string.byte(value, 1, 7)
+                assert(b1 == 0x7f)
+                assert(b2 == 0x45)
+                assert(b3 == 0x4c)
+                assert(b4 == 0x46)
+                assert(b5 == 0x00)
+                assert(b6 == 0x02)
+                assert(b7 == 0xff)
             "#,
         )
         .expect("verification should succeed");
