@@ -32,6 +32,14 @@ pub struct ProjectScript {
 }
 
 #[derive(Clone, Debug)]
+pub struct ExternalFile {
+    pub relative_path: PathBuf,
+    pub container_path: Vec<String>,
+    pub name: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct ProjectLayout {
     pub top_level: Vec<ProjectMount>,
 }
@@ -58,6 +66,7 @@ pub struct ProjectNode {
 struct DirNode {
     directories: BTreeMap<String, DirNode>,
     scripts: Vec<ProjectScript>,
+    external_files: Vec<ExternalFile>,
 }
 
 impl LoadedProject {
@@ -88,12 +97,26 @@ impl LoadedProject {
             .collect()
     }
 
+    pub fn external_files(&self) -> Result<Vec<ExternalFile>> {
+        self.files
+            .iter()
+            .filter_map(|file| classify_external_file(file).transpose())
+            .collect()
+    }
+
     pub fn layout(&self) -> Result<ProjectLayout> {
         let scripts = self.scripts()?;
+        let external_files = self.external_files()?;
         let mut root = DirNode::default();
+        
         for script in scripts {
             let container_path = script.container_path.clone();
             insert_script(&mut root, &container_path, script);
+        }
+
+        for external_file in external_files {
+            let container_path = external_file.container_path.clone();
+            insert_external_file(&mut root, &container_path, external_file);
         }
 
         let mut top_level = Vec::new();
@@ -104,6 +127,10 @@ impl LoadedProject {
             .cloned()
         {
             top_level.push(ProjectMount::DataModelChild(script_to_node(script)));
+        }
+
+        for external_file in root.external_files.clone() {
+            top_level.push(ProjectMount::DataModelChild(external_file_to_node(external_file)));
         }
 
         for (name, directory) in root.directories {
@@ -213,12 +240,66 @@ fn classify_script_file(file: &ProjectFile) -> Result<Option<ProjectScript>> {
     }))
 }
 
+fn classify_external_file(file: &ProjectFile) -> Result<Option<ExternalFile>> {
+    let segments = path_segments(&file.relative_path);
+    
+    // Check if the file is in an ExternalData directory
+    if segments.is_empty() || segments[0] != "ExternalData" {
+        return Ok(None);
+    }
+
+    // Skip if it's a script file (even in ExternalData)
+    let Some(file_name) = file
+        .relative_path
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
+        return Ok(None);
+    };
+
+    if file_name.ends_with(".luau")
+        || file_name.ends_with(".lua")
+        || file_name.ends_with(".server.luau")
+        || file_name.ends_with(".server.lua")
+        || file_name.ends_with(".client.luau")
+        || file_name.ends_with(".client.lua")
+    {
+        return Ok(None);
+    }
+
+    let content = String::from_utf8(file.bytes.clone()).map_err(|error| {
+        Error::RuntimeError(format!(
+            "External file {} is not valid UTF-8: {error}",
+            file.relative_path.display()
+        ))
+    })?;
+
+    let mut container_path = segments.clone();
+    container_path.remove(0); // Remove "ExternalData"
+    container_path.pop(); // Remove filename
+
+    Ok(Some(ExternalFile {
+        relative_path: file.relative_path.clone(),
+        container_path,
+        name: file_name.to_string(),
+        content,
+    }))
+}
+
 fn insert_script(root: &mut DirNode, path: &[String], script: ProjectScript) {
     let mut current = root;
     for segment in path {
         current = current.directories.entry(segment.clone()).or_default();
     }
     current.scripts.push(script);
+}
+
+fn insert_external_file(root: &mut DirNode, path: &[String], external_file: ExternalFile) {
+    let mut current = root;
+    for segment in path {
+        current = current.directories.entry(segment.clone()).or_default();
+    }
+    current.external_files.push(external_file);
 }
 
 fn build_directory_mount(name: String, directory: DirNode) -> Option<ProjectNode> {
@@ -268,6 +349,10 @@ fn build_children_from_directory(
         children.push(script_to_node(script.clone()));
     }
 
+    for external_file in &directory.external_files {
+        children.push(external_file_to_node(external_file.clone()));
+    }
+
     for (name, child_directory) in &directory.directories {
         let node = build_directory_mount(name.clone(), child_directory.clone());
         if let Some(node) = node {
@@ -291,6 +376,16 @@ fn script_to_node(script: ProjectScript) -> ProjectNode {
         class_name: class_name.to_string(),
         source: Some(script.source),
         script_path: Some(script.relative_path),
+        children: Vec::new(),
+    }
+}
+
+fn external_file_to_node(external_file: ExternalFile) -> ProjectNode {
+    ProjectNode {
+        name: external_file.name,
+        class_name: "StringValue".to_string(),
+        source: Some(external_file.content),
+        script_path: Some(external_file.relative_path),
         children: Vec::new(),
     }
 }

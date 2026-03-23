@@ -41,6 +41,21 @@ Files are loaded into an instance tree that mirrors the folder structure.
 
 Server mode auto-runs `Script` instances. Client mode auto-runs `LocalScript` instances. `ModuleScript` instances can be loaded with `require(moduleScriptInstance)`.
 
+## External files (ExternalData)
+
+Files placed in an `ExternalData` directory at the root of your project are loaded as `StringValue` instances. The filename becomes the instance name, and the file content is stored in the `Value` property. This allows you to include configuration files, data files, and other resources in your projects.
+
+```
+project/
+├── ExternalData/
+│   ├── config.json
+│   ├── data.txt
+│   └── subfolder/
+│       └── seed.csv
+```
+
+See [EXTERNAL_FILES.md](EXTERNAL_FILES.md) for more details and examples.
+
 ## `.rleimg`
 
 `.rleimg` stands for `RobloxLuaEnvironment` image. It is a portable packaged snapshot of a project directory that the CLI can pack, unpack, and run directly.
