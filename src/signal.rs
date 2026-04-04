@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::thread;
+use std::time::Duration;
 
 use mlua::{Function, Lua, MultiValue, RegistryKey, Result, Value};
 
@@ -15,6 +17,8 @@ pub struct Signal {
     name: String,
     next_connection_id: u64,
     listeners: Vec<Listener>,
+    fire_count: u64,
+    last_args: Vec<SignalArg>,
 }
 
 #[derive(Debug)]
@@ -45,6 +49,8 @@ impl Signal {
             name: name.into(),
             next_connection_id: 1,
             listeners: Vec::new(),
+            fire_count: 0,
+            last_args: Vec::new(),
         }))
     }
 
@@ -91,12 +97,39 @@ impl Signal {
             .any(|listener| listener.id == id)
     }
 
+    pub fn generation(signal: &SignalRef) -> u64 {
+        signal.borrow().fire_count
+    }
+
+    pub fn wait_next(signal: &SignalRef, after_generation: u64) -> Vec<SignalArg> {
+        loop {
+            if let Some(args) = {
+                let signal_ref = signal.borrow();
+                if signal_ref.fire_count > after_generation {
+                    Some(signal_ref.last_args.clone())
+                } else {
+                    None
+                }
+            } {
+                return args;
+            }
+
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     pub fn fire(
         signal: &SignalRef,
         lua: &Lua,
         runtime: &Runtime,
         args: &[SignalArg],
     ) -> Result<()> {
+        {
+            let mut signal_mut = signal.borrow_mut();
+            signal_mut.fire_count += 1;
+            signal_mut.last_args = args.to_vec();
+        }
+
         let calls = {
             let signal_ref = signal.borrow();
             signal_ref
@@ -133,7 +166,7 @@ impl Signal {
     }
 }
 
-fn signal_arg_to_lua(lua: &Lua, runtime: &Runtime, arg: &SignalArg) -> mlua::Result<Value> {
+pub fn signal_arg_to_lua(lua: &Lua, runtime: &Runtime, arg: &SignalArg) -> mlua::Result<Value> {
     Ok(match arg {
         SignalArg::Nil => Value::Nil,
         SignalArg::String(value) => Value::String(lua.create_string(value)?),

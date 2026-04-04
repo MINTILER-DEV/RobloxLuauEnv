@@ -19,7 +19,7 @@ use crate::instance::{Instance, InstanceRef, PropertyValue};
 use crate::math::{Color3, Vector3};
 use crate::project::{LoadedProject, ProjectLayout, ProjectMount, ProjectNode, is_rleimg_path};
 use crate::runtime::{Runtime, RuntimeMode};
-use crate::signal::{ConnectionHandle, Signal, SignalRef};
+use crate::signal::{ConnectionHandle, Signal, SignalRef, signal_arg_to_lua};
 
 pub struct RobloxEnvironment {
     lua: Lua,
@@ -611,7 +611,10 @@ fn lookup_instance_member(lua: &Lua, this: &LuaInstance, key: &str) -> Result<Op
         | "PlayerRemoving" => {
             if let Some(signal) = Instance::find_event(&this.instance, key) {
                 return Ok(Some(Value::UserData(
-                    lua.create_userdata(LuaSignal { signal })?,
+                    lua.create_userdata(LuaSignal {
+                        signal,
+                        runtime: this.runtime.clone(),
+                    })?,
                 )));
             }
             Ok(Some(Value::Nil))
@@ -758,13 +761,43 @@ fn make_find_first_child(lua: &Lua, instance: LuaInstance) -> Result<Function> {
 
 fn make_wait_for_child(lua: &Lua, instance: LuaInstance) -> Result<Function> {
     lua.create_function(move |lua, args: MultiValue| {
-        let value = make_find_first_child(lua, instance.clone())?.call::<Value>(args)?;
-        if matches!(value, Value::Nil) {
-            eprintln!(
-                "[roblox-env warning] WaitForChild does not yield yet; returning nil immediately."
-            );
+        let mut args = args.into_iter();
+        let _self = args.next();
+        let Some(Value::String(name)) = args.next() else {
+            return Err(Error::RuntimeError(
+                "WaitForChild expects a child name".to_string(),
+            ));
+        };
+        let timeout = match args.next() {
+            Some(Value::Integer(value)) => Some(value as f64),
+            Some(Value::Number(value)) => Some(value),
+            _ => None,
+        };
+        let name = name.to_str()?.to_string();
+
+        let start = std::time::Instant::now();
+        loop {
+            if let Some(child) = instance
+                .instance
+                .borrow()
+                .children
+                .iter()
+                .find(|child| child.borrow().name == name)
+                .cloned()
+            {
+                return Ok(Value::UserData(
+                    lua.create_userdata(LuaInstance::new(instance.runtime.clone(), child))?,
+                ));
+            }
+
+            if let Some(limit) = timeout {
+                if start.elapsed().as_secs_f64() >= limit.max(0.0) {
+                    return Ok(Value::Nil);
+                }
+            }
+
+            thread::sleep(Duration::from_millis(10));
         }
-        Ok(value)
     })
 }
 
@@ -801,7 +834,10 @@ fn make_get_service(lua: &Lua, instance: LuaInstance) -> Result<Function> {
 fn make_get_property_changed_signal(lua: &Lua, instance: LuaInstance) -> Result<Function> {
     lua.create_function(move |lua, (_self, property_name): (Value, String)| {
         let signal = Instance::ensure_property_signal(&instance.instance, &property_name);
-        Ok(Value::UserData(lua.create_userdata(LuaSignal { signal })?))
+        Ok(Value::UserData(lua.create_userdata(LuaSignal {
+            signal,
+            runtime: instance.runtime.clone(),
+        })?))
     })
 }
 
@@ -990,6 +1026,7 @@ fn assert_http_enabled(instance: &InstanceRef) -> Result<()> {
 #[derive(Clone)]
 struct LuaSignal {
     signal: SignalRef,
+    runtime: Runtime,
 }
 
 impl UserData for LuaSignal {
@@ -1006,6 +1043,11 @@ impl UserData for LuaSignal {
                     this.signal.clone(),
                     true,
                 )?)),
+                "Wait" => Ok(Value::Function(make_signal_wait(
+                    lua,
+                    this.signal.clone(),
+                    this.runtime.clone(),
+                )?)),
                 _ => Ok(Value::Nil),
             }
         });
@@ -1016,6 +1058,18 @@ fn make_signal_connect(lua: &Lua, signal: SignalRef, once: bool) -> Result<Funct
     lua.create_function(move |lua, (_self, callback): (Value, Function)| {
         let connection = Signal::connect(&signal, lua, callback, once)?;
         Ok(lua.create_userdata(LuaConnection { connection })?)
+    })
+}
+
+fn make_signal_wait(lua: &Lua, signal: SignalRef, runtime: Runtime) -> Result<Function> {
+    lua.create_function(move |lua, _self: Value| {
+        let generation = Signal::generation(&signal);
+        let args = Signal::wait_next(&signal, generation);
+        let lua_args = args
+            .iter()
+            .map(|arg| signal_arg_to_lua(lua, &runtime, arg))
+            .collect::<mlua::Result<Vec<_>>>()?;
+        Ok(MultiValue::from_vec(lua_args))
     })
 }
 
