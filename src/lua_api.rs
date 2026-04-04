@@ -66,10 +66,10 @@ impl RobloxEnvironment {
 
     pub fn run_project(&self, project: LoadedProject) -> Result<()> {
         let layout = project.layout()?;
-        let mut auto_run = Vec::new();
-        self.instantiate_layout(&layout, &mut auto_run)?;
+        self.instantiate_layout(&layout)?;
+        self.bootstrap_client_player_scripts()?;
 
-        for script in auto_run {
+        for script in self.collect_auto_run_scripts() {
             self.execute_script_instance(&script)?;
         }
 
@@ -249,16 +249,12 @@ impl RobloxEnvironment {
         })
     }
 
-    fn instantiate_layout(
-        &self,
-        layout: &ProjectLayout,
-        auto_run: &mut Vec<InstanceRef>,
-    ) -> Result<()> {
+    fn instantiate_layout(&self, layout: &ProjectLayout) -> Result<()> {
         for mount in &layout.top_level {
             match mount {
                 ProjectMount::DataModelChild(node) => {
                     let parent = self.runtime.data_model();
-                    self.instantiate_project_node(node, &parent, auto_run)?;
+                    self.instantiate_project_node(node, &parent)?;
                 }
                 ProjectMount::ServiceContents {
                     service_name,
@@ -269,7 +265,7 @@ impl RobloxEnvironment {
                     }
                     let parent = self.runtime.get_service(service_name)?;
                     for child in children {
-                        self.instantiate_project_node(child, &parent, auto_run)?;
+                        self.instantiate_project_node(child, &parent)?;
                     }
                 }
             }
@@ -282,21 +278,37 @@ impl RobloxEnvironment {
         &self,
         node: &ProjectNode,
         parent: &InstanceRef,
-        auto_run: &mut Vec<InstanceRef>,
     ) -> Result<InstanceRef> {
-        let instance = self.runtime.create_instance(&node.class_name);
-        self.runtime.set_property(
-            &self.lua,
-            &instance,
-            "Name",
-            PropertyValue::String(node.name.clone()),
-        )?;
+        let instance =
+            if let Some(existing) = find_matching_child(parent, &node.name, &node.class_name) {
+                existing
+            } else {
+                let instance = self.runtime.create_instance(&node.class_name);
+                self.runtime.set_property(
+                    &self.lua,
+                    &instance,
+                    "Name",
+                    PropertyValue::String(node.name.clone()),
+                )?;
+                self.runtime
+                    .set_parent(&self.lua, &instance, Some(parent.clone()))?;
+                instance
+            };
+
         if let Some(source) = &node.source {
             self.runtime.set_property(
                 &self.lua,
                 &instance,
                 "Source",
                 PropertyValue::String(source.clone()),
+            )?;
+        }
+        if let Some(run_context) = &node.run_context {
+            self.runtime.set_property(
+                &self.lua,
+                &instance,
+                "RunContext",
+                PropertyValue::String(run_context.clone()),
             )?;
         }
         if let Some(value) = &node.value {
@@ -307,30 +319,97 @@ impl RobloxEnvironment {
                 PropertyValue::BinaryString(value.clone()),
             )?;
         }
-        instance.borrow_mut().script_path = node
-            .script_path
-            .as_ref()
-            .map(|path| normalize_script_path(path));
-        self.runtime
-            .set_parent(&self.lua, &instance, Some(parent.clone()))?;
-        self.runtime.mark_replicated_instance(&instance);
-
-        if self.should_auto_run_class(&node.class_name) {
-            auto_run.push(instance.clone());
+        {
+            let mut instance_mut = instance.borrow_mut();
+            instance_mut.script_path = node
+                .script_path
+                .as_ref()
+                .map(|path| normalize_script_path(path));
+            instance_mut.auto_run_enabled = node.auto_run;
         }
+        self.runtime.mark_replicated_instance(&instance);
+        self.runtime.ensure_builtin_children(&instance);
 
         for child in &node.children {
-            self.instantiate_project_node(child, &instance, auto_run)?;
+            self.instantiate_project_node(child, &instance)?;
         }
 
         Ok(instance)
     }
 
-    fn should_auto_run_class(&self, class_name: &str) -> bool {
-        matches!(
-            (self.runtime.mode(), class_name),
-            (RuntimeMode::Server, "Script") | (RuntimeMode::Client, "LocalScript")
-        )
+    fn bootstrap_client_player_scripts(&self) -> Result<()> {
+        if self.runtime.mode() != RuntimeMode::Client {
+            return Ok(());
+        }
+
+        let starter_player = self.runtime.get_service("StarterPlayer")?;
+        let starter_player_scripts = self.runtime.ensure_named_child(
+            &starter_player,
+            "StarterPlayerScripts",
+            "StarterPlayerScripts",
+        );
+        let Some(local_player) = self.runtime.local_player() else {
+            return Ok(());
+        };
+        let player_scripts =
+            self.runtime
+                .ensure_named_child(&local_player, "PlayerScripts", "PlayerScripts");
+
+        let existing_children = player_scripts.borrow().children.clone();
+        for child in existing_children {
+            self.runtime.destroy_instance(&self.lua, &child)?;
+        }
+
+        let starter_children = starter_player_scripts.borrow().children.clone();
+        for child in starter_children {
+            let cloned = self.runtime.clone_instance_tree(&child);
+            self.runtime
+                .set_parent(&self.lua, &cloned, Some(player_scripts.clone()))?;
+            self.runtime.mark_replicated_instance(&cloned);
+        }
+
+        Ok(())
+    }
+
+    fn collect_auto_run_scripts(&self) -> Vec<InstanceRef> {
+        let mut scripts = Vec::new();
+        collect_auto_run_scripts_from(&self.runtime.data_model(), &mut scripts);
+        scripts
+            .into_iter()
+            .filter(|instance| self.should_auto_run_instance(instance))
+            .collect()
+    }
+
+    fn should_auto_run_instance(&self, instance: &InstanceRef) -> bool {
+        if !instance.borrow().auto_run_enabled {
+            return false;
+        }
+
+        let class_name = instance.borrow().class_name.clone();
+        match (self.runtime.mode(), class_name.as_str()) {
+            (RuntimeMode::Server, "Script") => match script_run_context(instance).as_deref() {
+                Some("Server") => true,
+                Some("Legacy") => {
+                    is_descendant_of_service(instance, "ServerScriptService")
+                        || is_descendant_of_service(instance, "Workspace")
+                }
+                _ => false,
+            },
+            (RuntimeMode::Client, "Script") => {
+                if script_run_context(instance).as_deref() != Some("Client") {
+                    return false;
+                }
+                is_descendant_of_service(instance, "Workspace")
+                    || is_descendant_of_service(instance, "ReplicatedStorage")
+                    || is_descendant_of_service(instance, "ReplicatedFirst")
+                    || is_descendant_of_named_container(instance, "PlayerScripts")
+            }
+            (RuntimeMode::Client, "LocalScript") => {
+                is_descendant_of_service(instance, "ReplicatedFirst")
+                    || is_descendant_of_named_container(instance, "PlayerScripts")
+            }
+            _ => false,
+        }
     }
 
     fn execute_script_instance(&self, instance: &InstanceRef) -> Result<()> {
@@ -345,6 +424,72 @@ impl RobloxEnvironment {
             .set_environment(env)
             .exec()
     }
+}
+
+fn find_matching_child(parent: &InstanceRef, name: &str, class_name: &str) -> Option<InstanceRef> {
+    parent
+        .borrow()
+        .children
+        .iter()
+        .find(|child| {
+            let child_ref = child.borrow();
+            child_ref.name == name && child_ref.class_name == class_name
+        })
+        .cloned()
+}
+
+fn collect_auto_run_scripts_from(root: &InstanceRef, scripts: &mut Vec<InstanceRef>) {
+    let children = root.borrow().children.clone();
+    for child in children {
+        let class_name = child.borrow().class_name.clone();
+        if matches!(class_name.as_str(), "Script" | "LocalScript") {
+            scripts.push(child.clone());
+        }
+        collect_auto_run_scripts_from(&child, scripts);
+    }
+}
+
+fn script_run_context(instance: &InstanceRef) -> Option<String> {
+    match Instance::get_property(instance, "RunContext") {
+        Some(PropertyValue::String(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn is_descendant_of_service(instance: &InstanceRef, service_name: &str) -> bool {
+    top_level_service_name(instance).as_deref() == Some(service_name)
+}
+
+fn is_descendant_of_named_container(instance: &InstanceRef, ancestor_name: &str) -> bool {
+    let mut cursor = Some(instance.clone());
+    while let Some(current) = cursor {
+        let current_ref = current.borrow();
+        if current_ref.name == ancestor_name || current_ref.class_name == ancestor_name {
+            return true;
+        }
+        cursor = current_ref
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.upgrade());
+    }
+    false
+}
+
+fn top_level_service_name(instance: &InstanceRef) -> Option<String> {
+    let mut cursor = Some(instance.clone());
+    let mut candidate = None;
+    while let Some(current) = cursor {
+        let current_ref = current.borrow();
+        if current_ref.parent.is_none() {
+            return candidate;
+        }
+        candidate = Some(current_ref.name.clone());
+        cursor = current_ref
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.upgrade());
+    }
+    None
 }
 
 fn create_script_environment(lua: &Lua, runtime: &Runtime, script: &InstanceRef) -> Result<Table> {
@@ -408,7 +553,8 @@ impl UserData for LuaInstance {
                         this.runtime.set_parent(lua, &this.instance, parent)?;
                     }
                     _ => {
-                        let property = lua_value_to_property_for_instance(&this.instance, &key, &value)?;
+                        let property =
+                            lua_value_to_property_for_instance(&this.instance, &key, &value)?;
                         this.runtime
                             .set_property(lua, &this.instance, &key, property)?;
                     }
@@ -1178,7 +1324,40 @@ mod tests {
     use crate::project::{LoadedProject, ProjectFile};
     use crate::runtime::RuntimeMode;
     use mlua::{Lua, Value};
-    use std::path::PathBuf;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn collect_project_files(root: &Path, prefix: &Path) -> Vec<ProjectFile> {
+        fn walk(root: &Path, dir: &Path, prefix: &Path, out: &mut Vec<ProjectFile>) {
+            let mut entries = fs::read_dir(dir)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", dir.display()))
+                .collect::<Vec<_>>();
+            entries.sort_by_key(|entry| entry.as_ref().map(|e| e.path()).ok());
+
+            for entry in entries {
+                let entry = entry.expect("directory entry");
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(root, &path, prefix, out);
+                    continue;
+                }
+
+                let relative = path.strip_prefix(root).unwrap_or_else(|error| {
+                    panic!("strip prefix failed for {}: {error}", path.display())
+                });
+                out.push(ProjectFile {
+                    relative_path: prefix.join(relative),
+                    bytes: fs::read(&path).unwrap_or_else(|error| {
+                        panic!("failed to read {}: {error}", path.display())
+                    }),
+                });
+            }
+        }
+
+        let mut files = Vec::new();
+        walk(root, root, prefix, &mut files);
+        files
+    }
 
     #[test]
     fn parts_stay_anchored_when_lua_tries_to_disable_them() {
@@ -1244,6 +1423,73 @@ mod tests {
     }
 
     #[test]
+    fn client_run_context_and_local_scripts_use_new_runtime_rules() {
+        let env = RobloxEnvironment::new(RuntimeMode::Client).expect("environment");
+        let project = LoadedProject {
+            files: vec![
+                ProjectFile {
+                    relative_path: PathBuf::from("Workspace/ClientBoot.client.luau"),
+                    bytes: br#"
+                        local marker = Instance.new("StringValue")
+                        marker.Name = "WorkspaceClientRan"
+                        marker.Parent = workspace
+                    "#
+                    .to_vec(),
+                },
+                ProjectFile {
+                    relative_path: PathBuf::from("ReplicatedStorage/ClientReplica.client.luau"),
+                    bytes: br#"
+                        local marker = Instance.new("StringValue")
+                        marker.Name = "ReplicatedStorageClientRan"
+                        marker.Parent = workspace
+                    "#
+                    .to_vec(),
+                },
+                ProjectFile {
+                    relative_path: PathBuf::from("ReplicatedFirst/LocalBoot.local.luau"),
+                    bytes: br#"
+                        local marker = Instance.new("StringValue")
+                        marker.Name = "ReplicatedFirstLocalRan"
+                        marker.Parent = workspace
+                    "#
+                    .to_vec(),
+                },
+                ProjectFile {
+                    relative_path: PathBuf::from("Workspace/ShouldNotRun.local.luau"),
+                    bytes: br#"
+                        local marker = Instance.new("StringValue")
+                        marker.Name = "WorkspaceLocalRan"
+                        marker.Parent = workspace
+                    "#
+                    .to_vec(),
+                },
+            ],
+        };
+
+        env.run_project(project).expect("project should run");
+        env.run_script(
+            "verify_client_runtime_rules",
+            r#"
+                assert(workspace:FindFirstChild("WorkspaceClientRan") ~= nil)
+                assert(workspace:FindFirstChild("ReplicatedStorageClientRan") ~= nil)
+                assert(workspace:FindFirstChild("ReplicatedFirstLocalRan") ~= nil)
+                assert(workspace:FindFirstChild("WorkspaceLocalRan") == nil)
+
+                assert(workspace.ClientBoot.ClassName == "Script")
+                assert(workspace.ClientBoot.RunContext == "Client")
+
+                local rs = game:GetService("ReplicatedStorage")
+                assert(rs.ClientReplica.ClassName == "Script")
+                assert(rs.ClientReplica.RunContext == "Client")
+
+                local rf = game:GetService("ReplicatedFirst")
+                assert(rf.LocalBoot.ClassName == "LocalScript")
+            "#,
+        )
+        .expect("verification should succeed");
+    }
+
+    #[test]
     fn project_loader_runs_server_scripts_and_leaves_modules_requirable() {
         let env = RobloxEnvironment::new(RuntimeMode::Server).expect("environment");
         let project = LoadedProject {
@@ -1271,6 +1517,98 @@ mod tests {
             r#"
                 local part = workspace:FindFirstChild("LoadedFromModule")
                 assert(part ~= nil)
+            "#,
+        )
+        .expect("verification should succeed");
+    }
+
+    #[test]
+    fn server_and_legacy_run_contexts_follow_placement_rules() {
+        let env = RobloxEnvironment::new(RuntimeMode::Server).expect("environment");
+        let project = LoadedProject {
+            files: vec![
+                ProjectFile {
+                    relative_path: PathBuf::from("ReplicatedStorage/ServerBoot.server.luau"),
+                    bytes: br#"
+                        local marker = Instance.new("StringValue")
+                        marker.Name = "ServerBootRan"
+                        marker.Parent = workspace
+                    "#
+                    .to_vec(),
+                },
+                ProjectFile {
+                    relative_path: PathBuf::from("Workspace/LegacyWorkspace.legacy.luau"),
+                    bytes: br#"
+                        local marker = Instance.new("StringValue")
+                        marker.Name = "LegacyWorkspaceRan"
+                        marker.Parent = workspace
+                    "#
+                    .to_vec(),
+                },
+                ProjectFile {
+                    relative_path: PathBuf::from("ServerScriptService/LegacyServer.legacy.luau"),
+                    bytes: br#"
+                        local marker = Instance.new("StringValue")
+                        marker.Name = "LegacyServerRan"
+                        marker.Parent = workspace
+                    "#
+                    .to_vec(),
+                },
+                ProjectFile {
+                    relative_path: PathBuf::from("ReplicatedStorage/LegacyReplica.legacy.luau"),
+                    bytes: br#"
+                        local marker = Instance.new("StringValue")
+                        marker.Name = "LegacyReplicaRan"
+                        marker.Parent = workspace
+                    "#
+                    .to_vec(),
+                },
+            ],
+        };
+
+        env.run_project(project).expect("project should run");
+        env.run_script(
+            "verify_server_runtime_rules",
+            r#"
+                assert(workspace:FindFirstChild("ServerBootRan") ~= nil)
+                assert(workspace:FindFirstChild("LegacyWorkspaceRan") ~= nil)
+                assert(workspace:FindFirstChild("LegacyServerRan") ~= nil)
+                assert(workspace:FindFirstChild("LegacyReplicaRan") == nil)
+
+                local rs = game:GetService("ReplicatedStorage")
+                assert(rs.ServerBoot.ClassName == "Script")
+                assert(rs.ServerBoot.RunContext == "Server")
+                assert(rs.LegacyReplica.RunContext == "Legacy")
+            "#,
+        )
+        .expect("verification should succeed");
+    }
+
+    #[test]
+    fn script_disable_directive_keeps_script_instance_without_running_it() {
+        let env = RobloxEnvironment::new(RuntimeMode::Server).expect("environment");
+        let project = LoadedProject {
+            files: vec![ProjectFile {
+                relative_path: PathBuf::from("ServerScriptService/Boot.server.luau"),
+                bytes: br#"
+                    --!rle script-disable
+                    local marker = Instance.new("StringValue")
+                    marker.Name = "ShouldNotExist"
+                    marker.Parent = workspace
+                "#
+                .to_vec(),
+            }],
+        };
+
+        env.run_project(project).expect("project should load");
+        env.run_script(
+            "verify_disabled_script",
+            r#"
+                local sss = game:GetService("ServerScriptService")
+                local boot = sss:FindFirstChild("Boot")
+                assert(boot ~= nil)
+                assert(boot.ClassName == "Script")
+                assert(workspace:FindFirstChild("ShouldNotExist") == nil)
             "#,
         )
         .expect("verification should succeed");
@@ -1364,6 +1702,70 @@ mod tests {
     }
 
     #[test]
+    fn elfluau_runs_compiled_strlen_probe() {
+        let env = RobloxEnvironment::new(RuntimeMode::Server).expect("environment");
+        let module_root = Path::new("projects/ElfLuau/ReplicatedStorage/ElfLuau");
+        let probe_path = Path::new("projects/ElfLuau/ExternalData/elfluau_probe.elf");
+
+        let mut files = collect_project_files(module_root, Path::new("ReplicatedStorage/ElfLuau"));
+        files.push(ProjectFile {
+            relative_path: PathBuf::from("ExternalData/elfluau_probe.elf"),
+            bytes: fs::read(probe_path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", probe_path.display())),
+        });
+
+        env.run_project(LoadedProject { files })
+            .expect("project should load");
+        env.run_script(
+            "verify_elfluau_probe",
+            r#"
+                local rs = game:GetService("ReplicatedStorage")
+                local ElfLuau = require(rs:WaitForChild("ElfLuau"))
+                local code = ElfLuau.translateExternal("elfluau_probe.elf")
+                assert(code:find("local fn_L_401026", 1, true) ~= nil)
+                assert(code:find("while true do", 1, true) ~= nil)
+                local result = ElfLuau.runExternal("elfluau_probe.elf", {
+                    argv = { "/probe" },
+                })
+                assert(result.exitCode == 0)
+            "#,
+        )
+        .expect("verification should succeed");
+    }
+
+    #[test]
+    fn elfluau_runs_musl_strlen_probe() {
+        let env = RobloxEnvironment::new(RuntimeMode::Server).expect("environment");
+        let module_root = Path::new("projects/ElfLuau/ReplicatedStorage/ElfLuau");
+        let probe_path = Path::new("projects/ElfLuau/ExternalData/musl_strlen.elf");
+
+        let mut files = collect_project_files(module_root, Path::new("ReplicatedStorage/ElfLuau"));
+        files.push(ProjectFile {
+            relative_path: PathBuf::from("ExternalData/musl_strlen.elf"),
+            bytes: fs::read(probe_path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", probe_path.display())),
+        });
+
+        env.run_project(LoadedProject { files })
+            .expect("project should load");
+        env.run_script(
+            "verify_musl_strlen_probe",
+            r#"
+                local rs = game:GetService("ReplicatedStorage")
+                local ElfLuau = require(rs:WaitForChild("ElfLuau"))
+                local code = ElfLuau.translateExternal("musl_strlen.elf")
+                assert(code:find("local fn_L_401026", 1, true) ~= nil)
+                assert(code:find("while true do", 1, true) ~= nil)
+                local result = ElfLuau.runExternal("musl_strlen.elf", {
+                    argv = { "/probe" },
+                })
+                assert(result.exitCode == 0)
+            "#,
+        )
+        .expect("verification should succeed");
+    }
+
+    #[test]
     fn only_server_can_set_network_owner() {
         let server = RobloxEnvironment::new(RuntimeMode::Server).expect("server");
         server
@@ -1395,6 +1797,75 @@ mod tests {
                 "#,
             )
             .expect("client should not set owner");
+    }
+
+    #[test]
+    fn starter_player_scripts_copy_into_player_scripts_in_client_mode() {
+        let env = RobloxEnvironment::new(RuntimeMode::Client).expect("environment");
+        let project = LoadedProject {
+            files: vec![
+                ProjectFile {
+                    relative_path: PathBuf::from("StarterPlayerScripts/Boot.local.luau"),
+                    bytes: br#"
+                        local counter = workspace:FindFirstChild("LocalBootRuns")
+                        if counter == nil then
+                            counter = Instance.new("StringValue")
+                            counter.Name = "LocalBootRuns"
+                            counter.Value = "1"
+                            counter.Parent = workspace
+                        else
+                            counter.Value = tostring(tonumber(counter.Value) + 1)
+                        end
+                    "#
+                    .to_vec(),
+                },
+                ProjectFile {
+                    relative_path: PathBuf::from("StarterPlayerScripts/ClientBoot.client.luau"),
+                    bytes: br#"
+                        local counter = workspace:FindFirstChild("ClientBootRuns")
+                        if counter == nil then
+                            counter = Instance.new("StringValue")
+                            counter.Name = "ClientBootRuns"
+                            counter.Value = "1"
+                            counter.Parent = workspace
+                        else
+                            counter.Value = tostring(tonumber(counter.Value) + 1)
+                        end
+                    "#
+                    .to_vec(),
+                },
+            ],
+        };
+
+        env.run_project(project).expect("project should run");
+        env.run_script(
+            "verify_starter_player_copy",
+            r#"
+                local players = game:GetService("Players")
+                local player = players.LocalPlayer
+                assert(player ~= nil)
+                assert(player.Name == "Player1")
+                assert(players.Player1 == player)
+                assert(#players:GetPlayers() == 1)
+
+                local playerScripts = player:FindFirstChild("PlayerScripts")
+                assert(playerScripts ~= nil)
+                assert(playerScripts:FindFirstChild("Boot") ~= nil)
+                assert(playerScripts:FindFirstChild("Boot").ClassName == "LocalScript")
+                assert(playerScripts:FindFirstChild("ClientBoot") ~= nil)
+                assert(playerScripts:FindFirstChild("ClientBoot").ClassName == "Script")
+                assert(playerScripts:FindFirstChild("ClientBoot").RunContext == "Client")
+
+                local starterPlayer = game:GetService("StarterPlayer")
+                assert(starterPlayer.StarterPlayerScripts ~= nil)
+                assert(starterPlayer.StarterPlayerScripts:FindFirstChild("Boot") ~= nil)
+                assert(starterPlayer.StarterPlayerScripts:FindFirstChild("ClientBoot") ~= nil)
+
+                assert(workspace.LocalBootRuns.Value == "1")
+                assert(workspace.ClientBootRuns.Value == "1")
+            "#,
+        )
+        .expect("verification should succeed");
     }
 
     #[test]

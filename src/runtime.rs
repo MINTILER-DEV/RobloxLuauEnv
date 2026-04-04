@@ -28,9 +28,11 @@ struct RuntimeState {
 
 const DEFAULT_SERVICES: &[(&str, &str)] = &[
     ("Workspace", "Workspace"),
+    ("ReplicatedFirst", "ReplicatedFirst"),
     ("ReplicatedStorage", "ReplicatedStorage"),
     ("ServerStorage", "ServerStorage"),
     ("ServerScriptService", "ServerScriptService"),
+    ("StarterPlayer", "StarterPlayer"),
     ("Lighting", "Lighting"),
     ("Players", "Players"),
     ("RunService", "RunService"),
@@ -57,6 +59,7 @@ impl Runtime {
             }
             let service = runtime.create_named_instance_internal(class_name, service_name, true);
             runtime.attach_initial(&service, &data_model);
+            runtime.ensure_builtin_children(&service);
             runtime
                 .state
                 .borrow_mut()
@@ -91,14 +94,14 @@ impl Runtime {
     }
 
     pub fn is_service_visible(&self, name: &str) -> bool {
-        !(self.mode() == RuntimeMode::Client
-            && matches!(name, "ServerStorage" | "ServerScriptService"))
+        !(self.mode() == RuntimeMode::Client && name.starts_with("Server"))
     }
 
     pub fn create_instance(&self, class_name: &str) -> InstanceRef {
         let instance = self.create_named_instance_internal(class_name, class_name, false);
+        self.ensure_builtin_children(&instance);
         if self.mode() == RuntimeMode::Client {
-            instance.borrow_mut().client_authoritative = true;
+            self.set_client_authoritative_recursive(&instance, true);
         }
         instance
     }
@@ -224,6 +227,11 @@ impl Runtime {
             if let Some(signal) = Instance::find_event(parent, "ChildRemoved") {
                 Signal::fire(&signal, lua, self, &[SignalArg::Instance(child.clone())])?;
             }
+            if parent.borrow().class_name == "Players" && child.borrow().class_name == "Player" {
+                if let Some(signal) = Instance::find_event(parent, "PlayerRemoving") {
+                    Signal::fire(&signal, lua, self, &[SignalArg::Instance(child.clone())])?;
+                }
+            }
             self.fire_descendant_signal(lua, parent, "DescendantRemoving", child)?;
         }
 
@@ -234,6 +242,11 @@ impl Runtime {
 
             if let Some(signal) = Instance::find_event(parent, "ChildAdded") {
                 Signal::fire(&signal, lua, self, &[SignalArg::Instance(child.clone())])?;
+            }
+            if parent.borrow().class_name == "Players" && child.borrow().class_name == "Player" {
+                if let Some(signal) = Instance::find_event(parent, "PlayerAdded") {
+                    Signal::fire(&signal, lua, self, &[SignalArg::Instance(child.clone())])?;
+                }
             }
             self.fire_descendant_signal(lua, parent, "DescendantAdded", child)?;
         }
@@ -319,13 +332,15 @@ impl Runtime {
 
         let _ = Instance::set_property(&players, "CharacterAutoLoads", PropertyValue::Bool(false));
 
-        let local_player = self.create_named_instance_internal("Player", "LocalPlayer", false);
+        let local_player = self.create_named_instance_internal("Player", "Player1", false);
+        self.ensure_builtin_children(&local_player);
         let _ = Instance::set_property(
             &local_player,
             "DisplayName",
-            PropertyValue::String("LocalPlayer".to_string()),
+            PropertyValue::String("Player1".to_string()),
         );
         self.attach_initial(&local_player, &players);
+        self.set_client_authoritative_recursive(&local_player, true);
         self.state.borrow_mut().local_player = Some(local_player);
     }
 
@@ -341,6 +356,43 @@ impl Runtime {
             default_name,
             is_service,
         )))
+    }
+
+    pub fn ensure_builtin_children(&self, instance: &InstanceRef) {
+        let class_name = instance.borrow().class_name.clone();
+        match class_name.as_str() {
+            "Player" => {
+                self.ensure_named_child(instance, "PlayerScripts", "PlayerScripts");
+            }
+            "StarterPlayer" => {
+                self.ensure_named_child(instance, "StarterPlayerScripts", "StarterPlayerScripts");
+            }
+            _ => {}
+        }
+    }
+
+    pub fn ensure_named_child(
+        &self,
+        parent: &InstanceRef,
+        child_name: &str,
+        child_class_name: &str,
+    ) -> InstanceRef {
+        if let Some(existing) = parent
+            .borrow()
+            .children
+            .iter()
+            .find(|child| child.borrow().name == child_name)
+            .cloned()
+        {
+            return existing;
+        }
+
+        let child = self.create_named_instance_internal(child_class_name, child_name, false);
+        if self.mode() == RuntimeMode::Client && parent.borrow().client_authoritative {
+            self.set_client_authoritative_recursive(&child, true);
+        }
+        self.attach_initial(&child, parent);
+        child
     }
 
     fn allocate_id(&self) -> u64 {

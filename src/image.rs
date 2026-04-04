@@ -1,6 +1,6 @@
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flate2::Compression;
@@ -50,9 +50,11 @@ pub fn write_project_image(project: &LoadedProject, output_path: &Path) -> Resul
 
     // Compress the JSON data using gzip
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&json_data)
+    encoder
+        .write_all(&json_data)
         .map_err(|error| Error::RuntimeError(format!("Compression error: {error}")))?;
-    let compressed = encoder.finish()
+    let compressed = encoder
+        .finish()
         .map_err(|error| Error::RuntimeError(format!("Compression finish error: {error}")))?;
 
     let mut encoded = IMAGE_MAGIC.as_bytes().to_vec();
@@ -79,7 +81,8 @@ pub fn decode_project_image(bytes: &[u8]) -> Result<LoadedProject> {
     let json_bytes = if is_compressed {
         let mut decoder = GzDecoder::new(payload);
         let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed)
+        decoder
+            .read_to_end(&mut decompressed)
             .map_err(|error| Error::RuntimeError(format!("Decompression error: {error}")))?;
         decompressed
     } else {

@@ -32,14 +32,16 @@ Those two commands now stay alive like a host process and exit on `Ctrl+C`.
 
 Files are loaded into an instance tree that mirrors the folder structure.
 
-- root folders matching service names like `Workspace`, `ReplicatedStorage`, `ServerStorage`, `Players`, or `Lighting` are loaded under those services
+- root folders matching service names like `Workspace`, `ReplicatedFirst`, `ReplicatedStorage`, `ServerStorage`, `ServerScriptService`, `StarterPlayer`, `Players`, or `Lighting` are loaded under those services
 - other folders become `Folder` instances under `game`
 - if a non-service folder contains `init.luau` or `init.lua`, that folder becomes a `ModuleScript` named after the folder, and the rest of that folder's contents become children of that module
 - `*.luau` and `*.lua` become `ModuleScript`
-- `*.server.luau` and `*.server.lua` become `Script`
-- `*.client.luau` and `*.client.lua` become `LocalScript`
+- `*.server.luau` and `*.server.lua` become `Script` with `RunContext = "Server"`
+- `*.client.luau` and `*.client.lua` become `Script` with `RunContext = "Client"`
+- `*.legacy.luau` and `*.legacy.lua` become `Script` with `RunContext = "Legacy"`
+- `*.local.luau` and `*.local.lua` become `LocalScript`
 
-Server mode auto-runs `Script` instances. Client mode auto-runs `LocalScript` instances. `ModuleScript` instances can be loaded with `require(moduleScriptInstance)`.
+Server mode auto-runs `Script` instances with `RunContext = "Server"` anywhere, plus `RunContext = "Legacy"` inside `Workspace` and `ServerScriptService`. Client mode auto-runs `Script` instances with `RunContext = "Client"` inside `Workspace`, `ReplicatedStorage`, `ReplicatedFirst`, and copied `PlayerScripts`, plus `LocalScript` instances inside `ReplicatedFirst` and copied `PlayerScripts`. `ModuleScript` instances can be loaded with `require(moduleScriptInstance)`.
 
 ## External files (ExternalData)
 
@@ -66,7 +68,7 @@ See [EXTERNAL_FILES.md](EXTERNAL_FILES.md) for more details and examples.
 
 ## Current runtime coverage
 
-- `game`, `workspace`, and built-in services including `Workspace`, `ReplicatedStorage`, `ServerStorage`, `Lighting`, `Players`, `RunService`, `HttpService`, and `TweenService`
+- `game`, `workspace`, and built-in services including `Workspace`, `ReplicatedFirst`, `ReplicatedStorage`, `ServerStorage`, `ServerScriptService`, `StarterPlayer`, `Lighting`, `Players`, `RunService`, `HttpService`, and `TweenService`
 - instances, parenting, descendants, cloning, destroying, `FindFirstChild`, `GetChildren`, `GetDescendants`, `GetFullName`, and property changed signals
 - signals/events through `:Connect(...)`, `:Once(...)`, and connection `:Disconnect()`
 - `Vector3.new(...)` and `Color3.new(...)`
@@ -81,8 +83,10 @@ See [EXTERNAL_FILES.md](EXTERNAL_FILES.md) for more details and examples.
 
 - `Players.CharacterAutoLoads` is forced to `false`
 - `Players.LocalPlayer` exists
+- `Players.LocalPlayer` is named `Player1`
+- `StarterPlayerScripts` contents are copied into `Players.Player1.PlayerScripts` before client auto-run
 - `Player:LoadCharacter()` errors by design
-- `ServerStorage` and `ServerScriptService` are not mounted into the client view
+- services whose names start with `Server` are not mounted into the client view
 - client edits to server-replicated `Part` instances are treated as local-only unless the server assigned network ownership to `LocalPlayer`
 
 ## Network ownership

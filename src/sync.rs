@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use mlua::{Error, Result};
 use serde::{Deserialize, Serialize};
-use tiny_http::{Request, Response, Server, Header};
+use tiny_http::{Header, Request, Response, Server};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FileInfo {
@@ -26,7 +26,7 @@ struct SyncState {
 
 pub fn start_sync_server(folder: &Path, port: u16) -> Result<()> {
     let folder_path = folder.to_path_buf();
-    
+
     if !folder_path.exists() {
         return Err(Error::RuntimeError(format!(
             "Folder does not exist: {}",
@@ -42,9 +42,8 @@ pub fn start_sync_server(folder: &Path, port: u16) -> Result<()> {
     }
 
     let addr = format!("127.0.0.1:{}", port);
-    let server = Server::http(&addr).map_err(|e| {
-        Error::RuntimeError(format!("Failed to start server on {}: {}", addr, e))
-    })?;
+    let server = Server::http(&addr)
+        .map_err(|e| Error::RuntimeError(format!("Failed to start server on {}: {}", addr, e)))?;
 
     println!("[FileSync] Server listening on http://{}", addr);
 
@@ -85,12 +84,16 @@ fn handle_request(request: Request, state: &Arc<Mutex<SyncState>>) {
             let files = list_files(&state.watch_folder);
             match serde_json::to_string(&files) {
                 Ok(json) => {
-                    let response = Response::from_string(json)
-                        .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                    let response = Response::from_string(json).with_header(
+                        Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                    );
                     let _ = request.respond(response);
                 }
                 Err(_) => {
-                    let _ = request.respond(Response::from_string("{\"error\": \"Failed to serialize files\"}").with_status_code(500));
+                    let _ = request.respond(
+                        Response::from_string("{\"error\": \"Failed to serialize files\"}")
+                            .with_status_code(500),
+                    );
                 }
             }
         }
@@ -105,7 +108,8 @@ fn handle_request(request: Request, state: &Arc<Mutex<SyncState>>) {
             let _ = request.respond(Response::from_string("{\"status\": \"received\"}"));
         }
         _ => {
-            let _ = request.respond(Response::from_string("{\"error\": \"Not found\"}").with_status_code(404));
+            let _ = request
+                .respond(Response::from_string("{\"error\": \"Not found\"}").with_status_code(404));
         }
     }
 }
@@ -114,25 +118,32 @@ fn handle_file_request(request: Request, base_dir: &Path, file_path: &str) {
     let full_path = base_dir.join(file_path);
 
     if !full_path.starts_with(base_dir) {
-        let _ = request.respond(Response::from_string("{\"error\": \"Path traversal not allowed\"}").with_status_code(403));
+        let _ = request.respond(
+            Response::from_string("{\"error\": \"Path traversal not allowed\"}")
+                .with_status_code(403),
+        );
         return;
     }
 
     match fs::read_to_string(&full_path) {
-        Ok(content) => {
-            match serde_json::to_string(&FileContent { content }) {
-                Ok(json) => {
-                    let response = Response::from_string(json)
-                        .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                    let _ = request.respond(response);
-                }
-                Err(_) => {
-                    let _ = request.respond(Response::from_string("{\"error\": \"Failed to serialize content\"}").with_status_code(500));
-                }
+        Ok(content) => match serde_json::to_string(&FileContent { content }) {
+            Ok(json) => {
+                let response = Response::from_string(json).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                );
+                let _ = request.respond(response);
             }
-        }
+            Err(_) => {
+                let _ = request.respond(
+                    Response::from_string("{\"error\": \"Failed to serialize content\"}")
+                        .with_status_code(500),
+                );
+            }
+        },
         Err(_) => {
-            let _ = request.respond(Response::from_string("{\"error\": \"File not found\"}").with_status_code(404));
+            let _ = request.respond(
+                Response::from_string("{\"error\": \"File not found\"}").with_status_code(404),
+            );
         }
     }
 }
@@ -169,7 +180,11 @@ fn monitor_folder(folder: &Path, state: &Arc<Mutex<SyncState>>) {
         let mut state = state.lock().unwrap();
 
         for file in files {
-            let prev_time = state.file_modifications.get(&file.path).copied().unwrap_or(0);
+            let prev_time = state
+                .file_modifications
+                .get(&file.path)
+                .copied()
+                .unwrap_or(0);
             if file.modified_at > prev_time {
                 println!("[FileSync] File changed: {}", file.path);
                 state.file_modifications.insert(file.path, file.modified_at);

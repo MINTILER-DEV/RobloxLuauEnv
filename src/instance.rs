@@ -42,6 +42,7 @@ pub struct Instance {
     pub network_owner_name: Option<String>,
     pub client_authoritative: bool,
     pub is_service: bool,
+    pub auto_run_enabled: bool,
     pub destroyed: bool,
 }
 
@@ -65,6 +66,7 @@ impl Instance {
             network_owner_name: None,
             client_authoritative: false,
             is_service,
+            auto_run_enabled: false,
             destroyed: false,
         }
     }
@@ -169,6 +171,7 @@ impl Instance {
             network_owner_name: source.network_owner_name.clone(),
             client_authoritative: source.client_authoritative,
             is_service: false,
+            auto_run_enabled: source.auto_run_enabled,
             destroyed: false,
         };
         Rc::new(RefCell::new(cloned))
@@ -223,6 +226,7 @@ pub fn property_kind(class_name: &str, property_name: &str) -> Option<PropertyKi
         "UserId" if class_name == "Player" => Some(PropertyKind::Number),
         "DisplayName" if class_name == "Player" => Some(PropertyKind::String),
         "HttpEnabled" if class_name == "HttpService" => Some(PropertyKind::Bool),
+        "RunContext" if class_name == "Script" => Some(PropertyKind::String),
         "Source" if matches!(class_name, "Script" | "LocalScript" | "ModuleScript") => {
             Some(PropertyKind::String)
         }
@@ -277,12 +281,15 @@ pub fn default_properties(class_name: &str) -> HashMap<String, PropertyValue> {
         }
         "Script" | "LocalScript" | "ModuleScript" => {
             properties.insert("Source".to_string(), PropertyValue::String(String::new()));
+            if class_name == "Script" {
+                properties.insert(
+                    "RunContext".to_string(),
+                    PropertyValue::String("Legacy".to_string()),
+                );
+            }
         }
         "StringValue" => {
-            properties.insert(
-                "Value".to_string(),
-                PropertyValue::BinaryString(Vec::new()),
-            );
+            properties.insert("Value".to_string(), PropertyValue::BinaryString(Vec::new()));
         }
         _ => {}
     }
@@ -326,14 +333,17 @@ pub fn is_a_class(class_name: &str, query: &str) -> bool {
         "Folder" => &["Instance"],
         "StringValue" => &["ValueBase", "Instance"],
         "ReplicatedStorage"
+        | "ReplicatedFirst"
         | "ServerStorage"
         | "ServerScriptService"
+        | "StarterPlayer"
         | "Lighting"
         | "Players"
         | "RunService"
         | "HttpService"
         | "TweenService" => &["Service", "Instance"],
         "Player" => &["Instance"],
+        "StarterPlayerScripts" | "PlayerScripts" => &["Instance"],
         "Script" | "LocalScript" | "ModuleScript" => &["LuaSourceContainer", "Instance"],
         _ => &["Instance"],
     };

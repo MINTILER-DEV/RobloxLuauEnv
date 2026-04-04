@@ -58,7 +58,10 @@ fn main() -> Result<()> {
             println!("Exported {} to {}", input.display(), output_rbxmx.display());
         }
         Command::Sync { folder, port } => {
-            println!("[FileSync] Starting file sync server for folder: {}", folder.display());
+            println!(
+                "[FileSync] Starting file sync server for folder: {}",
+                folder.display()
+            );
             sync::start_sync_server(&folder, port)?;
         }
     }

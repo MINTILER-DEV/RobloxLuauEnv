@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui::{
-    self, CentralPanel, Color32, Context, CursorIcon, Rect, RichText, Sense, SidePanel,
-    TextEdit, TopBottomPanel, pos2,
+    self, CentralPanel, Color32, Context, CursorIcon, Rect, RichText, Sense, SidePanel, TextEdit,
+    TopBottomPanel, pos2,
 };
 use eframe::{App, Frame, NativeOptions};
 use mlua::{Error, Result};
@@ -22,12 +22,8 @@ use crate::rbxlx;
 
 pub fn run() -> Result<()> {
     let options = NativeOptions::default();
-    eframe::run_native(
-        "RLE",
-        options,
-        Box::new(|cc| Box::new(RleGuiApp::new(cc))),
-    )
-    .map_err(|error| Error::RuntimeError(format!("Could not launch GUI: {error}")))
+    eframe::run_native("RLE", options, Box::new(|cc| Box::new(RleGuiApp::new(cc))))
+        .map_err(|error| Error::RuntimeError(format!("Could not launch GUI: {error}")))
 }
 
 struct RleGuiApp {
@@ -419,8 +415,8 @@ impl RleGuiApp {
                 .bottom_panel_height
                 .clamp(min_bottom_height, max_bottom_height);
 
-            let editor_height =
-                (available.height() - self.bottom_panel_height - splitter_height).max(min_editor_height);
+            let editor_height = (available.height() - self.bottom_panel_height - splitter_height)
+                .max(min_editor_height);
             let bottom_height = (available.height() - editor_height - splitter_height)
                 .clamp(min_bottom_height, max_bottom_height);
             self.bottom_panel_height = bottom_height;
@@ -433,10 +429,8 @@ impl RleGuiApp {
                 pos2(available.min.x, editor_rect.max.y),
                 pos2(available.max.x, editor_rect.max.y + splitter_height),
             );
-            let bottom_rect = Rect::from_min_max(
-                pos2(available.min.x, splitter_rect.max.y),
-                available.max,
-            );
+            let bottom_rect =
+                Rect::from_min_max(pos2(available.min.x, splitter_rect.max.y), available.max);
 
             let splitter_response = ui
                 .interact(
@@ -448,12 +442,15 @@ impl RleGuiApp {
 
             if splitter_response.dragged() {
                 let pointer_delta_y = ctx.input(|input| input.pointer.delta().y);
-                self.bottom_panel_height =
-                    (self.bottom_panel_height - pointer_delta_y).clamp(min_bottom_height, max_bottom_height);
+                self.bottom_panel_height = (self.bottom_panel_height - pointer_delta_y)
+                    .clamp(min_bottom_height, max_bottom_height);
             }
 
-            ui.painter()
-                .rect_filled(splitter_rect.shrink2(egui::vec2(0.0, 2.0)), 4.0, ui.visuals().widgets.inactive.bg_fill);
+            ui.painter().rect_filled(
+                splitter_rect.shrink2(egui::vec2(0.0, 2.0)),
+                4.0,
+                ui.visuals().widgets.inactive.bg_fill,
+            );
 
             ui.allocate_ui_at_rect(editor_rect, |ui| {
                 if let Some(project) = self.project.as_mut() {
@@ -471,7 +468,11 @@ impl RleGuiApp {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.set_min_size(bottom_rect.size());
                     ui.horizontal(|ui| {
-                        ui.selectable_value(&mut self.bottom_tab, BottomPanelTab::Console, "Console");
+                        ui.selectable_value(
+                            &mut self.bottom_tab,
+                            BottomPanelTab::Console,
+                            "Console",
+                        );
                         ui.selectable_value(
                             &mut self.bottom_tab,
                             BottomPanelTab::ScreenGui,
@@ -530,7 +531,21 @@ impl RleGuiApp {
                 ui.label("Type");
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut dialog.kind, ScriptKind::ModuleScript, "ModuleScript");
-                    ui.selectable_value(&mut dialog.kind, ScriptKind::ServerScript, "Script");
+                    ui.selectable_value(
+                        &mut dialog.kind,
+                        ScriptKind::ServerScript,
+                        "Script (Server)",
+                    );
+                    ui.selectable_value(
+                        &mut dialog.kind,
+                        ScriptKind::ClientScript,
+                        "Script (Client)",
+                    );
+                    ui.selectable_value(
+                        &mut dialog.kind,
+                        ScriptKind::LegacyScript,
+                        "Script (Legacy)",
+                    );
                     ui.selectable_value(&mut dialog.kind, ScriptKind::LocalScript, "LocalScript");
                 });
                 ui.label("Name");
@@ -771,13 +786,17 @@ impl OpenProject {
     ) -> Result<PathBuf> {
         let trimmed_name = name.trim();
         if trimmed_name.is_empty() {
-            return Err(Error::RuntimeError("Script name cannot be empty".to_string()));
+            return Err(Error::RuntimeError(
+                "Script name cannot be empty".to_string(),
+            ));
         }
 
         let filename = match kind {
             ScriptKind::ModuleScript => format!("{trimmed_name}.luau"),
             ScriptKind::ServerScript => format!("{trimmed_name}.server.luau"),
-            ScriptKind::LocalScript => format!("{trimmed_name}.client.luau"),
+            ScriptKind::ClientScript => format!("{trimmed_name}.client.luau"),
+            ScriptKind::LegacyScript => format!("{trimmed_name}.legacy.luau"),
+            ScriptKind::LocalScript => format!("{trimmed_name}.local.luau"),
         };
         let mut relative_path = PathBuf::new();
         for segment in &container_path {
@@ -848,7 +867,9 @@ impl ExplorerNode {
             ExplorerNodeKind::Service => format!("{} [Service]", self.title),
             ExplorerNodeKind::Folder => format!("{} [Folder]", self.title),
             ExplorerNodeKind::ModuleFolder => format!("{} [ModuleScript]", self.title),
-            ExplorerNodeKind::Script(kind) => format!("{} [{}]", self.title, script_kind_name(kind)),
+            ExplorerNodeKind::Script(kind) => {
+                format!("{} [{}]", self.title, script_kind_name(kind))
+            }
         }
     }
 }
@@ -1220,9 +1241,11 @@ fn is_service_name(name: &str) -> bool {
     matches!(
         name,
         "Workspace"
+            | "ReplicatedFirst"
             | "ReplicatedStorage"
             | "ServerStorage"
             | "ServerScriptService"
+            | "StarterPlayer"
             | "Lighting"
             | "Players"
             | "RunService"
@@ -1234,7 +1257,9 @@ fn is_service_name(name: &str) -> bool {
 fn script_kind_name(kind: ScriptKind) -> &'static str {
     match kind {
         ScriptKind::ModuleScript => "ModuleScript",
-        ScriptKind::ServerScript => "Script",
+        ScriptKind::ServerScript => "Script (Server)",
+        ScriptKind::ClientScript => "Script (Client)",
+        ScriptKind::LegacyScript => "Script (Legacy)",
         ScriptKind::LocalScript => "LocalScript",
     }
 }
@@ -1243,6 +1268,8 @@ fn default_script_template(kind: ScriptKind) -> &'static str {
     match kind {
         ScriptKind::ModuleScript => "local module = {}\n\nreturn module\n",
         ScriptKind::ServerScript => "print(\"server script booted\")\n",
+        ScriptKind::ClientScript => "print(\"client run-context script booted\")\n",
+        ScriptKind::LegacyScript => "print(\"legacy script booted\")\n",
         ScriptKind::LocalScript => "print(\"client script booted\")\n",
     }
 }

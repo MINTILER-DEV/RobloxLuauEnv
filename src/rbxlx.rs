@@ -73,8 +73,10 @@ fn layout_to_rbxlx(layout: &ProjectLayout) -> String {
                     name: service_name.clone(),
                     class_name: service_name.clone(),
                     source: None,
+                    run_context: None,
                     value: None,
                     script_path: None,
+                    auto_run: false,
                     children: children.clone(),
                 };
                 write_node(&mut out, &service_node, 1, &mut referents);
@@ -143,6 +145,9 @@ fn write_node(
     write_string_property(out, depth + 2, "Name", &node.name);
     if let Some(source) = &node.source {
         write_protected_string_property(out, depth + 2, "Source", source);
+    }
+    if let Some(run_context) = &node.run_context {
+        write_string_property(out, depth + 2, "RunContext", run_context);
     }
     if let Some(value) = &node.value {
         if let Ok(value_text) = std::str::from_utf8(value) {
