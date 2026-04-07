@@ -39,6 +39,7 @@ const DEFAULT_SERVICES: &[(&str, &str)] = &[
     ("HttpService", "HttpService"),
     ("DataStoreService", "DataStoreService"),
     ("MessagingService", "MessagingService"),
+    ("TextChatService", "TextChatService"),
     ("TweenService", "TweenService"),
 ];
 
@@ -368,6 +369,13 @@ impl Runtime {
             }
             "StarterPlayer" => {
                 self.ensure_named_child(instance, "StarterPlayerScripts", "StarterPlayerScripts");
+            }
+            "TextChatService" => {
+                self.ensure_named_child(
+                    instance,
+                    "ChatInputBarConfiguration",
+                    "ChatInputBarConfiguration",
+                );
             }
             _ => {}
         }

@@ -225,7 +225,12 @@ pub fn property_kind(class_name: &str, property_name: &str) -> Option<PropertyKi
         "CharacterAutoLoads" if class_name == "Players" => Some(PropertyKind::Bool),
         "UserId" if class_name == "Player" => Some(PropertyKind::Number),
         "DisplayName" if class_name == "Player" => Some(PropertyKind::String),
+        "DevComputerMovementMode" | "DevTouchMovementMode" if class_name == "StarterPlayer" => {
+            Some(PropertyKind::String)
+        }
         "HttpEnabled" if class_name == "HttpService" => Some(PropertyKind::Bool),
+        "Enabled" if class_name == "ChatInputBarConfiguration" => Some(PropertyKind::Bool),
+        "KeyboardKeyCode" if class_name == "ChatInputBarConfiguration" => Some(PropertyKind::String),
         "RunContext" if class_name == "Script" => Some(PropertyKind::String),
         "Source" if matches!(class_name, "Script" | "LocalScript" | "ModuleScript") => {
             Some(PropertyKind::String)
@@ -251,11 +256,28 @@ pub fn default_properties(class_name: &str) -> HashMap<String, PropertyValue> {
         "Players" => {
             properties.insert("CharacterAutoLoads".to_string(), PropertyValue::Bool(true));
         }
+        "StarterPlayer" => {
+            properties.insert(
+                "DevComputerMovementMode".to_string(),
+                PropertyValue::String("UserChoice".to_string()),
+            );
+            properties.insert(
+                "DevTouchMovementMode".to_string(),
+                PropertyValue::String("UserChoice".to_string()),
+            );
+        }
         "Player" => {
             properties.insert("UserId".to_string(), PropertyValue::Number(1.0));
             properties.insert(
                 "DisplayName".to_string(),
                 PropertyValue::String("Player".to_string()),
+            );
+        }
+        "ChatInputBarConfiguration" => {
+            properties.insert("Enabled".to_string(), PropertyValue::Bool(true));
+            properties.insert(
+                "KeyboardKeyCode".to_string(),
+                PropertyValue::String("Slash".to_string()),
             );
         }
         "HttpService" => {
