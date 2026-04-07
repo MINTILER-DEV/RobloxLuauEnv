@@ -37,6 +37,8 @@ const DEFAULT_SERVICES: &[(&str, &str)] = &[
     ("Players", "Players"),
     ("RunService", "RunService"),
     ("HttpService", "HttpService"),
+    ("DataStoreService", "DataStoreService"),
+    ("MessagingService", "MessagingService"),
     ("TweenService", "TweenService"),
 ];
 

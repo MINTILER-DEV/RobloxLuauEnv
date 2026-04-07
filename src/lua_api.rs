@@ -552,6 +552,11 @@ impl UserData for LuaInstance {
                         let parent = value_to_instance(value)?;
                         this.runtime.set_parent(lua, &this.instance, parent)?;
                     }
+                    "OnServerInvoke" | "OnClientInvoke"
+                        if this.instance.borrow().class_name == "RemoteFunction" =>
+                    {
+                        set_remote_function_callback(lua, this.instance.borrow().id, &key, value)?;
+                    }
                     _ => {
                         let property =
                             lua_value_to_property_for_instance(&this.instance, &key, &value)?;
@@ -678,6 +683,20 @@ fn lookup_instance_member(lua: &Lua, this: &LuaInstance, key: &str) -> Result<Op
         "JSONDecode" if this.instance.borrow().class_name == "HttpService" => {
             Ok(Some(Value::Function(make_http_json_decode(lua)?)))
         }
+        "InvokeServer" if this.instance.borrow().class_name == "RemoteFunction" => Ok(Some(
+            Value::Function(make_remote_function_invoke_server(lua, this.clone())?),
+        )),
+        "InvokeClient" if this.instance.borrow().class_name == "RemoteFunction" => Ok(Some(
+            Value::Function(make_remote_function_invoke_client(lua, this.clone())?),
+        )),
+        "OnServerInvoke" if this.instance.borrow().class_name == "RemoteFunction" => Ok(Some(
+            get_remote_function_callback(lua, this.instance.borrow().id, "OnServerInvoke")?
+                .unwrap_or(Value::Nil),
+        )),
+        "OnClientInvoke" if this.instance.borrow().class_name == "RemoteFunction" => Ok(Some(
+            get_remote_function_callback(lua, this.instance.borrow().id, "OnClientInvoke")?
+                .unwrap_or(Value::Nil),
+        )),
         _ => match Instance::get_property(&this.instance, key) {
             Some(value) => Ok(Some(property_to_lua(lua, &value)?)),
             None => Ok(None),
@@ -1010,6 +1029,101 @@ fn make_http_json_decode(lua: &Lua) -> Result<Function> {
             Error::RuntimeError(format!("HttpService:JSONDecode failed: {error}"))
         })?;
         json_to_lua(lua, &json)
+    })
+}
+
+fn remote_function_registry_name(property_name: &str) -> &'static str {
+    match property_name {
+        "OnServerInvoke" => "__roblox_env_remote_function_on_server_invoke",
+        "OnClientInvoke" => "__roblox_env_remote_function_on_client_invoke",
+        _ => "__roblox_env_remote_function_unknown",
+    }
+}
+
+fn ensure_remote_function_registry(lua: &Lua, property_name: &str) -> Result<Table> {
+    let registry_name = remote_function_registry_name(property_name);
+    if let Ok(table) = lua.named_registry_value::<Table>(registry_name) {
+        return Ok(table);
+    }
+
+    let table = lua.create_table()?;
+    lua.set_named_registry_value(registry_name, table.clone())?;
+    Ok(table)
+}
+
+fn set_remote_function_callback(
+    lua: &Lua,
+    instance_id: u64,
+    property_name: &str,
+    value: Value,
+) -> Result<()> {
+    let registry = ensure_remote_function_registry(lua, property_name)?;
+    match value {
+        Value::Nil => registry.set(instance_id, Value::Nil)?,
+        Value::Function(function) => registry.set(instance_id, function)?,
+        _ => {
+            return Err(Error::RuntimeError(format!(
+                "{property_name} must be a function or nil"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn get_remote_function_callback(
+    lua: &Lua,
+    instance_id: u64,
+    property_name: &str,
+) -> Result<Option<Value>> {
+    let registry = ensure_remote_function_registry(lua, property_name)?;
+    let value: Value = registry.get(instance_id)?;
+    Ok(match value {
+        Value::Nil => None,
+        other => Some(other),
+    })
+}
+
+fn make_remote_function_invoke_server(lua: &Lua, instance: LuaInstance) -> Result<Function> {
+    lua.create_function(move |lua, args: MultiValue| {
+        let mut args = args.into_iter();
+        let _self = args.next();
+        let callback = get_remote_function_callback(
+            lua,
+            instance.instance.borrow().id,
+            "OnServerInvoke",
+        )?;
+
+        let Some(Value::Function(function)) = callback else {
+            return Err(Error::RuntimeError(
+                "RemoteFunction.OnServerInvoke is not set".to_string(),
+            ));
+        };
+
+        let mut callback_args = Vec::new();
+        callback_args.push(Value::Nil);
+        callback_args.extend(args);
+        function.call::<MultiValue>(MultiValue::from_vec(callback_args))
+    })
+}
+
+fn make_remote_function_invoke_client(lua: &Lua, instance: LuaInstance) -> Result<Function> {
+    lua.create_function(move |lua, args: MultiValue| {
+        let mut args = args.into_iter();
+        let _self = args.next();
+        let _player = args.next();
+        let callback = get_remote_function_callback(
+            lua,
+            instance.instance.borrow().id,
+            "OnClientInvoke",
+        )?;
+
+        let Some(Value::Function(function)) = callback else {
+            return Err(Error::RuntimeError(
+                "RemoteFunction.OnClientInvoke is not set".to_string(),
+            ));
+        };
+
+        function.call::<MultiValue>(MultiValue::from_vec(args.collect()))
     })
 }
 
